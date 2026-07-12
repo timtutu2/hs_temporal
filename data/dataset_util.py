@@ -11,9 +11,8 @@ import random
 import cv2
 import numpy as np
 import torch
-from libyana.meshutils import meshio
 from PIL import Image
-from pytorch3d.io import load_obj
+import trimesh
 
 
 def load_img(path, order="RGB"):
@@ -356,24 +355,16 @@ def prepare_model_template(obj_root):
     obj_id = 1
     for obj in sorted(os.listdir(obj_root)):
         path = os.path.join(obj_root, obj, "textured_simple_2000.obj")
-        with open(path) as m_f:
-            mesh = meshio.fast_load_obj(m_f)[0]
-            if mesh["vertices"].shape[0] != 1000 or "meshlab" in obj_root:
-                verts, faces, aux = load_obj(path)
-                assert verts.shape[0] == 1000
-                templates.append(
-                    {
-                        "verts": verts,
-                        "face": faces.verts_idx.long(),
-                    }
-                )
-            else:
-                templates.append(
-                    {
-                        "verts": torch.Tensor(mesh["vertices"]),
-                        "face": torch.Tensor(mesh["faces"]).long(),
-                    }
-                )
+        mesh = trimesh.load(path, process=False, force="mesh", maintain_order=True)
+        verts = np.asarray(mesh.vertices, dtype=np.float32)
+        faces = np.asarray(mesh.faces, dtype=np.int64)
+        assert verts.shape[0] == 1000
+        templates.append(
+            {
+                "verts": torch.from_numpy(verts),
+                "face": torch.from_numpy(faces).long(),
+            }
+        )
         obj_names[obj_id] = obj
         obj_id += 1
     return templates, obj_names

@@ -354,6 +354,33 @@ class Model(nn.Module):
         pose_sdf = torch.clamp(pose_sdf, -cfg.ClampingDistance, cfg.ClampingDistance)
         return pose_points, pose_sdf, pose_posenc3d, pose_class
 
+    def get_temporal_pose_features(self, inputs, feature_pyramid):
+        if cfg.temporal_window <= 0 or "temporal_img" not in inputs:
+            return feature_pyramid
+
+        temporal_img = inputs["temporal_img"]
+        batch_size, temporal_window = temporal_img.shape[:2]
+        temporal_img = temporal_img.reshape(
+            batch_size * temporal_window, *temporal_img.shape[2:]
+        )
+
+        temporal_img_feat, temporal_skip_conn_layers = self.backbone_net(temporal_img)
+        temporal_feature_pyramid, _ = self.decoder_net(
+            temporal_img_feat, temporal_skip_conn_layers
+        )
+
+        pose_feature_pyramid = {}
+        for layer_name, cur_feature in feature_pyramid.items():
+            temporal_feature = temporal_feature_pyramid[layer_name]
+            temporal_feature = temporal_feature.reshape(
+                batch_size,
+                temporal_window,
+                *temporal_feature.shape[1:],
+            ).mean(dim=1)
+            pose_feature_pyramid[layer_name] = 0.5 * (cur_feature + temporal_feature)
+
+        return pose_feature_pyramid
+
     def forward(self, inputs, targets, meta_info, mode, epoch_cnt=1e8, batch_ratio=0):
         input_img = inputs["img"]
 
@@ -366,6 +393,7 @@ class Model(nn.Module):
 
         img_feat, enc_skip_conn_layers = self.backbone_net(input_img)
         feature_pyramid, decoder_out = self.decoder_net(img_feat, enc_skip_conn_layers)
+        pose_feature_pyramid = self.get_temporal_pose_features(inputs, feature_pyramid)
 
         if mode == "train" or cfg.dataset == "dexycb":
             hand_sdf_points = inputs["hand_sdf_points"]
@@ -484,11 +512,11 @@ class Model(nn.Module):
         sigma_obj = self.sdf_activation(obj_sdf.detach(), self.obj_sigmoid_beta)
 
         hand_fea, hand_points_cam = self.get_input_transformer(
-            feature_pyramid, hand_points, mano_root, cam_intr, cfg.hand_sdf_scale
+            pose_feature_pyramid, hand_points, mano_root, cam_intr, cfg.hand_sdf_scale
         )
         hand_points_notrans = hand_points_cam - mano_root[:, None, :]
         obj_fea, obj_points_cam = self.get_input_transformer(
-            feature_pyramid, obj_points, obj_center_cam, cam_intr, cfg.obj_sdf_scale
+            pose_feature_pyramid, obj_points, obj_center_cam, cam_intr, cfg.obj_sdf_scale
         )
         obj_points_notrans = obj_points_cam - obj_center_cam[:, None, :]
 

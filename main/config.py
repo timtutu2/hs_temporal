@@ -44,22 +44,22 @@ class Config:
         dataset = "dexycb"
 
     # please set the path here according to the readme#
-    object_models_dir = None
+    object_models_dir = "datasets/HOISDF/ycb_models/YCB_Video_Models/models"
     output_dir = "outputs"
-    annotation_dir = None
-    simple_object_models_dir = None
+    annotation_dir = "datasets/HOISDF/annotations/annotation_folder"
+    simple_object_models_dir = "datasets/HOISDF/simple_ycb_models/simple_ycb_models"
     if dataset == "ho3d":
-        ho3d_data_dir = None
-        fast_data_dir = None
+        ho3d_data_dir = "datasets/HOISDF/ho3d/HO3D_v2"
+        fast_data_dir = "datasets/HOISDF/ho3d/HO3D_v2"
     elif dataset == "dexycb":
-        dexycb_data_dir = None
-        fast_data_dir = None
-        image_fast_path = None
+        dexycb_data_dir = "datasets/DexYCB"
+        fast_data_dir = "datasets/DexYCB_SDF"
+        image_fast_path = "datasets/DexYCB"
 
 
-    train_batch_size = 22 
-    test_batch_size = 22 
-    eval_batch_size = 22 
+    train_batch_size = 6
+    test_batch_size = 12
+    eval_batch_size = 12
 
     num_samp_hand = 600
     num_samp_obj = 200
@@ -90,6 +90,7 @@ class Config:
     PointFeatSize = 33
     ClassifierBranch = False
     ClampingDistance = 0.15
+    temporal_window = 5
 
     # ~~~~~~~~~~~~~~~~~~~~~~Training Setup~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
     ## model

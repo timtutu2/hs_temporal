@@ -11,3 +11,6 @@ checkpoints/*
 ckpts/*
 outputs/
 *.zip
+datasets/
+.vscode/
+tool/mano_models/

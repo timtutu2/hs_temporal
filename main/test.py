@@ -57,8 +57,17 @@ def parse_args():
         dest="ckpt_path",
         help="Full path to the checkpoint file",
     )
+    parser.add_argument(
+        "--temporal_window",
+        type=int,
+        default=None,
+        help="Override cfg.temporal_window for evaluation. Use 0 to disable temporal input.",
+    )
     args = parser.parse_args()
     args.seq_name = None
+
+    if args.temporal_window is not None:
+        cfg.temporal_window = args.temporal_window
 
     cfg.calc_mutliscale_dim(cfg.use_big_decoder, cfg.resnet_type)
 

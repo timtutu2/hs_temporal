@@ -261,13 +261,41 @@ class Dataset(data.Dataset):
                     self.obj_rot_list.append(cv2.Rodrigues(obj_rot_mat)[0].squeeze())
                     self.obj_trans_list.append(obj_trans)
                     self.obj_cls_list.append(anno["objName"])
+            self.name_to_idx = {name: idx for idx, name in enumerate(self.set_list)}
 
         else:
             self.set_list = ho3d_util.load_names(
                 os.path.join(self.root, "evaluation.txt")
             )
+            self.name_to_idx = {name: idx for idx, name in enumerate(self.set_list)}
 
         # self.set_list = self.set_list[:100]
+
+    def get_temporal_indices(self, idx):
+        if cfg.temporal_window <= 0:
+            return []
+        current_name = self.set_list[idx]
+        if "/" not in current_name:
+            return [idx] * cfg.temporal_window
+
+        seq_name, frame_id = current_name.split("/")
+        try:
+            frame_num = int(frame_id)
+        except ValueError:
+            return [idx] * cfg.temporal_window
+
+        temporal_indices = []
+        for offset in range(cfg.temporal_window, 0, -1):
+            prev_frame = max(frame_num - offset, 0)
+            prev_name = "{}/{}".format(seq_name, str(prev_frame).zfill(len(frame_id)))
+            temporal_indices.append(self.name_to_idx.get(prev_name, idx))
+        return temporal_indices
+
+    def load_temporal_images(self, idx):
+        temporal_imgs = []
+        for prev_idx in self.get_temporal_indices(idx):
+            temporal_imgs.append(Image.open(self.image_paths[prev_idx]).convert("RGB"))
+        return temporal_imgs
 
     def data_aug(
         self,
@@ -283,6 +311,7 @@ class Dataset(data.Dataset):
         p3d,
         obj_rot,
         obj_trans,
+        temporal_imgs=None,
     ):
         # Copy to prevent data corruption
         img = img.copy()
@@ -298,6 +327,8 @@ class Dataset(data.Dataset):
         p3d = p3d.copy()
         obj_rot = obj_rot.copy()
         obj_trans = obj_trans.copy()
+        if temporal_imgs is not None:
+            temporal_imgs = [temporal_img.copy() for temporal_img in temporal_imgs]
 
         crop_hand = dataset_util.get_bbox_joints(joints_uv, bbox_factor=1.5)
         crop_obj = dataset_util.get_bbox_joints(p2d, bbox_factor=1.5)
@@ -351,6 +382,13 @@ class Dataset(data.Dataset):
         # Transform and crop
         img = dataset_util.transform_img(img, affinetrans, [self.inp_res, self.inp_res])
         img = img.crop((0, 0, self.inp_res, self.inp_res))
+        if temporal_imgs is not None:
+            temporal_imgs = [
+                dataset_util.transform_img(
+                    temporal_img, affinetrans, [self.inp_res, self.inp_res]
+                ).crop((0, 0, self.inp_res, self.inp_res))
+                for temporal_img in temporal_imgs
+            ]
 
         # Img blurring and color jitter
         blur_radius = random.random() * self.blur_radius
@@ -362,6 +400,11 @@ class Dataset(data.Dataset):
             hue=self.hue,
             contrast=self.contrast,
         )
+        if temporal_imgs is not None:
+            temporal_imgs = [
+                temporal_img.filter(ImageFilter.GaussianBlur(blur_radius))
+                for temporal_img in temporal_imgs
+            ]
 
         # Trasform hand seg and obj seg
         hand_seg = dataset_util.transform_img(
@@ -394,13 +437,16 @@ class Dataset(data.Dataset):
             p3d,
             obj_rot,
             obj_trans,
+            temporal_imgs,
         )
 
-    def data_crop(self, img, K, bbox_hand, p2d):
+    def data_crop(self, img, K, bbox_hand, p2d, temporal_imgs=None):
         # Copy to prevent data corruption
         img = img.copy()
         K = K.copy()
         bbox_hand = bbox_hand.copy()
+        if temporal_imgs is not None:
+            temporal_imgs = [temporal_img.copy() for temporal_img in temporal_imgs]
 
         crop_hand = dataset_util.get_bbox_joints(
             bbox_hand.reshape(2, 2), bbox_factor=1.5
@@ -423,8 +469,15 @@ class Dataset(data.Dataset):
         # Transform and crop
         img = dataset_util.transform_img(img, affinetrans, [self.inp_res, self.inp_res])
         img = img.crop((0, 0, self.inp_res, self.inp_res))
+        if temporal_imgs is not None:
+            temporal_imgs = [
+                dataset_util.transform_img(
+                    temporal_img, affinetrans, [self.inp_res, self.inp_res]
+                ).crop((0, 0, self.inp_res, self.inp_res))
+                for temporal_img in temporal_imgs
+            ]
         K = affinetrans.dot(K)
-        return img, K, bbox_hand, bbox_obj
+        return img, K, bbox_hand, bbox_obj, temporal_imgs
 
     def __len__(self):
         return len(self.set_list)
@@ -434,6 +487,7 @@ class Dataset(data.Dataset):
             img_path = self.image_paths[idx]
             # img = load_img(img_path)
             img = Image.open(img_path).convert("RGB")
+            temporal_imgs = self.load_temporal_images(idx)
             K = self.K[idx].copy()
             # hand information
             joints_uv = self.joints_uv[idx].copy()
@@ -502,6 +556,7 @@ class Dataset(data.Dataset):
                 p3d,
                 obj_rot,
                 obj_trans,
+                temporal_imgs,
             ) = self.data_aug(
                 img,
                 mano_param,
@@ -515,6 +570,7 @@ class Dataset(data.Dataset):
                 p3d,
                 obj_rot,
                 obj_trans,
+                temporal_imgs,
             )
 
             # obtain normalized points
@@ -548,6 +604,15 @@ class Dataset(data.Dataset):
             obj_pre_points = obj_pre_points * self.obj_sdf_scale
 
             img = self.transform(np.asarray(img).astype(np.float32)) / 255.0
+            if len(temporal_imgs) > 0:
+                temporal_img = torch.stack(
+                    [
+                        self.transform(np.asarray(temporal_img).astype(np.float32))
+                        / 255.0
+                        for temporal_img in temporal_imgs
+                    ],
+                    dim=0,
+                )
             hand_seg = torch.from_numpy(hand_seg.astype(np.float32))
             obj_seg = torch.from_numpy(obj_seg.astype(np.float32))
             obj_trans = obj_trans.astype(np.float32) - obj_center_cam
@@ -565,6 +630,8 @@ class Dataset(data.Dataset):
                 "hand_pre_points": hand_pre_points[:, :3],
                 "obj_pre_points": obj_pre_points[:, :3],
             }
+            if len(temporal_imgs) > 0:
+                inputs["temporal_img"] = temporal_img
 
             targets = {
                 "joint_coord": joints_uv.astype(np.float32),
@@ -594,6 +661,20 @@ class Dataset(data.Dataset):
                 self.root, self.mode, seqName, "rgb", frame_id + ".png"
             )
             img = Image.open(img_path).convert("RGB")
+            temporal_imgs = []
+            for prev_idx in self.get_temporal_indices(idx):
+                prev_seq_name, prev_frame_id = self.set_list[prev_idx].split("/")
+                temporal_imgs.append(
+                    Image.open(
+                        os.path.join(
+                            self.root,
+                            self.mode,
+                            prev_seq_name,
+                            "rgb",
+                            prev_frame_id + ".png",
+                        )
+                    ).convert("RGB")
+                )
             annotations = np.load(
                 os.path.join(
                     os.path.join(self.root, self.mode),
@@ -615,13 +696,24 @@ class Dataset(data.Dataset):
             root_joint = np.array(annotations["handJoints3D"], dtype=np.float32)
             root_joint = root_joint.dot(self.coord_change_mat.T)
 
-            img, K, bbox_hand, bbox_obj = self.data_crop(img, K, bbox_hand, p2d)
+            img, K, bbox_hand, bbox_obj, temporal_imgs = self.data_crop(
+                img, K, bbox_hand, p2d, temporal_imgs
+            )
 
             obj_center_cam = dataset_util.get_center_cam(
                 bbox_obj, self.obj_depth_mean_value, K
             ).astype(np.float32)
 
             img = self.transform(np.asarray(img).astype(np.float32)) / 255.0
+            if len(temporal_imgs) > 0:
+                temporal_img = torch.stack(
+                    [
+                        self.transform(np.asarray(temporal_img).astype(np.float32))
+                        / 255.0
+                        for temporal_img in temporal_imgs
+                    ],
+                    dim=0,
+                )
             obj_rot, obj_trans = convert_pose_to_opencv(
                 annotations["objRot"].squeeze(), annotations["objTrans"]
             )
@@ -634,6 +726,8 @@ class Dataset(data.Dataset):
             )
 
             inputs = {"img": img}
+            if len(temporal_imgs) > 0:
+                inputs["temporal_img"] = temporal_img
             targets = {
                 "obj_rot": obj_rot,
                 "rel_obj_trans": obj_trans.astype(np.float32),

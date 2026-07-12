@@ -22,6 +22,10 @@ Modules included:
 def ready_arguments(fname_or_dict, posekey4vposed='pose'):
     import numpy as np
     import pickle
+    import inspect
+
+    if not hasattr(inspect, "getargspec"):
+        inspect.getargspec = inspect.getfullargspec
     import chumpy as ch
     from chumpy.ch import MatVecMult
     from manopth.mano.webuser.posemapper import posemap
