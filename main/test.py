@@ -60,7 +60,7 @@ def parse_args():
     parser.add_argument(
         "--temporal_window",
         type=int,
-        default=None,
+        default=5,
         help="Override cfg.temporal_window for evaluation. Use 0 to disable temporal input.",
     )
     args = parser.parse_args()

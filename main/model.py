@@ -7,6 +7,7 @@
 import random
 
 import torch.nn as nn
+import torch.nn.functional as F
 
 from common.nets.layer import MLP
 from common.nets.loss import (
@@ -393,7 +394,7 @@ class Model(nn.Module):
 
         img_feat, enc_skip_conn_layers = self.backbone_net(input_img)
         feature_pyramid, decoder_out = self.decoder_net(img_feat, enc_skip_conn_layers)
-        pose_feature_pyramid = self.get_temporal_pose_features(inputs, feature_pyramid)
+        pose_feature_pyramid = feature_pyramid
 
         if mode == "train" or cfg.dataset == "dexycb":
             hand_sdf_points = inputs["hand_sdf_points"]
@@ -688,6 +689,39 @@ class Model(nn.Module):
             obj_trans,
             targets["rel_obj_trans"].unsqueeze(0).unsqueeze(0).expand_as(obj_trans),
         )
+
+        if (
+            mode == "train"
+            and "temporal_obj_rot" in targets
+            and "temporal_rel_obj_trans" in targets
+            and "temporal_valid" in targets
+        ):
+            temporal_valid = targets["temporal_valid"].float().view(1, 1, -1, 1)
+            temporal_denom = (
+                temporal_valid.sum() * obj_rot.shape[0] * obj_rot.shape[1] * obj_rot.shape[-1]
+            )
+            temporal_denom = temporal_denom.clamp(min=1.0)
+
+            temporal_obj_rot = (
+                targets["temporal_obj_rot"].unsqueeze(0).unsqueeze(0).expand_as(obj_rot)
+            )
+            temporal_rel_obj_trans = (
+                targets["temporal_rel_obj_trans"]
+                .unsqueeze(0)
+                .unsqueeze(0)
+                .expand_as(obj_trans)
+            )
+
+            loss["temporal_obj_rot"] = (
+                F.smooth_l1_loss(obj_rot, temporal_obj_rot, reduction="none")
+                * temporal_valid
+            ).sum() / temporal_denom
+            loss["temporal_obj_trans"] = (
+                F.smooth_l1_loss(
+                    obj_trans, temporal_rel_obj_trans, reduction="none"
+                )
+                * temporal_valid
+            ).sum() / temporal_denom
 
         out1 = {**loss, **out}
         return out1

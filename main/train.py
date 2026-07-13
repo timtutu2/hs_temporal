@@ -121,6 +121,10 @@ def main():
             loss["hand_seg"] *= cfg.obj_hm_weight
             loss["obj_rot"] *= cfg.obj_rot_weight
             loss["obj_trans"] *= cfg.obj_trans_weight
+            if "temporal_obj_rot" in loss:
+                loss["temporal_obj_rot"] *= cfg.temporal_obj_rot_weight
+            if "temporal_obj_trans" in loss:
+                loss["temporal_obj_trans"] *= cfg.temporal_obj_trans_weight
 
             loss["loss_joint_3d"] *= cfg.joint_weight
             loss["loss_joint_cls"] *= cfg.cls_weight
@@ -198,6 +202,8 @@ def main():
                 epoch_loss["obj_rot"] = 0.0
                 epoch_loss["obj_trans"] = 0.0
                 epoch_loss["DMA_adds"] = 0.0
+                epoch_loss["total_loss"] = 0.0
+                epoch_loss_by_name = {}
 
                 for itr, (inputs, targets, meta_info) in enumerate(
                     evaler.batch_generator
@@ -292,6 +298,15 @@ def main():
                     loss["obj_rot"] *= cfg.obj_rot_weight
                     loss["obj_trans"] *= cfg.obj_trans_weight
 
+                    total_loss = sum(loss[k] for k in loss)
+                    epoch_loss["total_loss"] += (
+                        total_loss.detach().cpu().numpy() * batch_samples
+                    )
+                    for loss_name, loss_value in loss.items():
+                        epoch_loss_by_name[loss_name] = epoch_loss_by_name.get(
+                            loss_name, 0.0
+                        ) + loss_value.detach().cpu().numpy() * batch_samples
+
                     epoch_loss["obj_rot"] += (
                         loss["obj_rot"].detach().cpu().numpy() * batch_samples
                     )
@@ -300,17 +315,12 @@ def main():
                     )
 
                     if itr % 400 == 0:
+                        tb_step = epoch * len(evaler.batch_generator) + itr
+                        for loss_name, loss_value in loss.items():
+                            writer.add_scalar(
+                                "eval {}".format(loss_name), loss_value, tb_step
+                            )
                         if cfg.dataset == "dexycb":
-                            writer.add_scalar(
-                                "eval sdfhand_loss",
-                                loss["sdfhand_loss"],
-                                epoch * len(trainer.batch_generator) + itr,
-                            )
-                            writer.add_scalar(
-                                "eval sdfobj_loss",
-                                loss["sdfobj_loss"],
-                                epoch * len(trainer.batch_generator) + itr,
-                            )
                             hm_grid = torchvision.utils.make_grid(
                                 joint_heatmap_out[:4].unsqueeze(1), normalize=True
                             )
@@ -351,71 +361,6 @@ def main():
                                 hseg_grid_pred,
                                 epoch * len(trainer.batch_generator) + itr,
                             )
-                            writer.add_scalar(
-                                "eval joint_3d loss",
-                                loss["loss_joint_3d"],
-                                epoch * len(evaler.batch_generator) + itr,
-                            )
-                            writer.add_scalar(
-                                "eval joints cls loss",
-                                loss["loss_joint_cls"],
-                                epoch * len(evaler.batch_generator) + itr,
-                            )
-                            writer.add_scalar(
-                                "eval sum joints 3d loss",
-                                loss["loss_all_joint_3d"],
-                                epoch * len(evaler.batch_generator) + itr,
-                            )
-
-                            if cfg.use_inverse_kinematics:
-                                writer.add_scalar(
-                                    "eval shape_param_loss loss",
-                                    loss["shape_param_loss"],
-                                    epoch * len(evaler.batch_generator) + itr,
-                                )
-                                writer.add_scalar(
-                                    "eval shape_reg_loss loss",
-                                    loss["shape_reg_loss"],
-                                    epoch * len(evaler.batch_generator) + itr,
-                                )
-                            else:
-                                writer.add_scalar(
-                                    "eval mano_mesh_loss loss",
-                                    loss["mano_mesh_loss"],
-                                    epoch * len(evaler.batch_generator) + itr,
-                                )
-                                writer.add_scalar(
-                                    "eval mano_joint_loss loss",
-                                    loss["mano_joint_loss"],
-                                    epoch * len(evaler.batch_generator) + itr,
-                                )
-                                writer.add_scalar(
-                                    "eval pose_param_loss loss",
-                                    loss["pose_param_loss"],
-                                    epoch * len(evaler.batch_generator) + itr,
-                                )
-                                writer.add_scalar(
-                                    "eval shape_param_loss loss",
-                                    loss["shape_param_loss"],
-                                    epoch * len(evaler.batch_generator) + itr,
-                                )
-
-                            writer.add_scalar(
-                                "eval obj_seg loss",
-                                loss["obj_seg"],
-                                epoch * len(evaler.batch_generator) + itr,
-                            )
-                            writer.add_scalar(
-                                "eval hand_seg loss",
-                                loss["hand_seg"],
-                                epoch * len(evaler.batch_generator) + itr,
-                            )
-                            writer.add_scalar(
-                                "eval heatmap loss",
-                                loss["joint_heatmap"],
-                                epoch * len(evaler.batch_generator) + itr,
-                            )
-
                         # dump the outputs
                         img_grid = torchvision.utils.make_grid(inputs["img"][:4])
                         writer.add_image(
@@ -424,18 +369,8 @@ def main():
                             epoch * len(evaler.batch_generator) + itr,
                         )
                         writer.add_scalar(
-                            "eval obj_rot loss",
-                            loss["obj_rot"],
-                            epoch * len(evaler.batch_generator) + itr,
-                        )
-                        writer.add_scalar(
-                            "eval obj_trans loss",
-                            loss["obj_trans"],
-                            epoch * len(evaler.batch_generator) + itr,
-                        )
-                        writer.add_scalar(
                             "eval total loss",
-                            sum(loss[k] for k in loss),
+                            total_loss,
                             epoch * len(evaler.batch_generator) + itr,
                         )
 
@@ -537,14 +472,17 @@ def main():
                         epoch,
                     )
 
-                epoch_loss["total_loss"] += (
-                    sum(loss[k] for k in loss).detach().cpu().numpy() * batch_samples
-                )
                 writer.add_scalar(
                     "epoch total loss",
                     epoch_loss["total_loss"] / evaler.total_sample,
                     epoch,
                 )
+                for loss_name, loss_sum in epoch_loss_by_name.items():
+                    writer.add_scalar(
+                        "epoch {}".format(loss_name),
+                        loss_sum / evaler.total_sample,
+                        epoch,
+                    )
                 writer.add_scalar(
                     "epoch obj_rot loss",
                     epoch_loss["obj_rot"] / evaler.total_sample,

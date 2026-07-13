@@ -144,6 +144,8 @@ class Config:
     obj_hm_weight = 1
     obj_rot_weight = 0.7
     obj_trans_weight = 100 / 1
+    temporal_obj_rot_weight = 0.05
+    temporal_obj_trans_weight = 5.0
 
     lambda_verts3d = 1e4
     lambda_joints3d = 1e4
